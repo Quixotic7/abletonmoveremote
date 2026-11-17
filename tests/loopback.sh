@@ -16,8 +16,10 @@ build/host/mrctl --host 127.0.0.1 --port $PORT selftest --inject "$DIR/mr-cmd" |
 if curl -s "http://127.0.0.1:$PORT/" | grep -q "<title>Move Remote</title>"; then echo "  ok    the page"
 else echo "  FAIL  the page"; fail=1; fi
 
-ACCEPT=$( (printf 'GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'; sleep 0.3) \
-    | nc 127.0.0.1 $PORT | tr -d '\r' | sed -n 's/^Sec-WebSocket-Accept: //p')
+# (curl, not nc: the BSD and Linux nc part differently from a connection left open, and a WebSocket stays open)
+ACCEPT=$(curl -s -i -N --max-time 1 -H "Connection: Upgrade" -H "Upgrade: websocket" \
+    -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" "http://127.0.0.1:$PORT/ws" \
+    | tr -d '\r' | sed -n 's/^Sec-WebSocket-Accept: //p')
 if [[ "$ACCEPT" == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" ]]; then echo "  ok    WebSocket handshake"
 else echo "  FAIL  WebSocket handshake (got '$ACCEPT')"; fail=1; fi
 

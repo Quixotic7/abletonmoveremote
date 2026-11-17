@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: MPL-2.0
+# A tag vX.Y.Z builds the module for the Move, publishes it as a GitHub release (moveremote-module.tar.gz), and
+# points release.json on main at it. Schwung Manager reads that release.json, both for the catalog and for
+# "Install Custom Module > From GitHub URL" (schwung docs/MODULES.md, "release.json").
+#
+# To release: bump the version in module/module.json and MR_VERSION in device/mr_core.h, commit, then
+#   git tag vX.Y.Z && git push origin vX.Y.Z
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag, module.json and the device agree on the version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          MOD=$(jq -r .version module/module.json)
+          DEV=$(sed -n 's/^#define MR_VERSION "\(.*\)"/\1/p' device/mr_core.h)
+          echo "tag $TAG, module.json $MOD, mr_core.h $DEV"
+          [ "$TAG" = "$MOD" ] && [ "$TAG" = "$DEV" ]
+
+      - name: Tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q xxd
+
+      - name: The tests (the device simulated on the runner)
+        run: make test
+
+      - name: Build for the Move and package
+        run: make package
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/moveremote-module.tar.gz
+          generate_release_notes: true
+
+      - name: Point release.json at it
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git fetch origin main
+          git checkout -f main
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cat > release.json <<EOF
+          {
+            "version": "${VERSION}",
+            "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/moveremote-module.tar.gz"
+          }
+          EOF
+          git add release.json
+          git commit -m "chore: release.json for ${{ github.ref_name }}" || echo "release.json unchanged"
+          git push origin main

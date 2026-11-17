@@ -16,6 +16,44 @@ It is a [Schwung](https://github.com/charlesvestal/schwung) standalone tool, bui
 [evilgeniusmove](https://github.com/Quixotic7/evilgeniusmove) is. It is not approved, endorsed or supported by
 Ableton.
 
+## Install
+
+You need a Move with [Schwung](https://schwung.dev) **1.6.0 or later** installed.
+
+**From Schwung Manager** (on a computer on the same Wi-Fi as the Move):
+
+1. Open [http://move.local:7700](http://move.local:7700) and go to **Modules**.
+2. Find **Move Remote** under Tools and press **Install**.
+
+**If it is not in the list yet:**
+
+1. On the same **Modules** page, open **Install Custom Module**.
+2. Under **From GitHub URL**, enter `Quixotic7/abletonmoveremote` and press **Install from GitHub**.
+
+Or download `moveremote-module.tar.gz` from the
+[latest release](https://github.com/Quixotic7/abletonmoveremote/releases/latest) and use **From Tarball**.
+
+To update later, use the same page: Move Remote shows an update when there is a new release.
+
+## Use
+
+1. **Start it:** on the Move, open Schwung's Tools menu with **Shift + Step 13** (or **Shift + touch Volume +
+   Step 13**, depending on your Schwung shortcut setting), choose **Move Remote**, and press the jog wheel. Move's
+   own software stops, and the screen shows the addresses to connect to.
+2. **Connect a computer, phone or tablet:**
+   - **USB:** plug the Move's USB-C port into the computer and connect to `172.16.254.1`. This is the fastest link.
+   - **Wi-Fi:** connect to `move.local`, or the Wi-Fi address on the Move's screen.
+   - **Try it in a browser:** open `http://move.local:7720/` (or `http://172.16.254.1:7720/` over USB). The page
+     shows every press, lights the pads you press, and lets you draw on the Move's screen. It works on an iPhone
+     or iPad too.
+3. **Leave it:** hold **Shift**, touch the **volume knob** and **click the jog wheel**. Move's own software starts
+   again. Holding the power button for 2 seconds turns the Move off.
+
+While Move Remote runs, the Move only does what the connected app tells it, so it makes no sound of its own.
+
+**On a Mac, if an app cannot connect:** macOS may be blocking it from your local network. Go to **System Settings
+→ Privacy & Security → Local Network** and turn the app on.
+
 ## Connecting
 
 | Link | Address |
