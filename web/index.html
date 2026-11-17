@@ -1,0 +1,235 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+<!-- Move Remote's own page, served by the Move at http://<move>:7720/. A host over WebSocket: it shows every input,
+     lights the pads you press, and draws on the screen. Plain http, so no secure-context APIs (no AudioWorklet). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Move Remote</title>
+<style>
+  :root { --bg:#16171a; --panel:#202228; --line:#33363e; --fg:#e8e8ea; --dim:#8a8d96; --acc:#5fd3a4; --warn:#f2b84b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 -apple-system, system-ui, sans-serif; }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  #state { color:var(--dim); font-variant-numeric:tabular-nums; }
+  #state.on { color:var(--acc); }
+  main { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:16px; padding:16px; max-width:1100px; }
+  @media (max-width: 800px) { main { grid-template-columns: minmax(0,1fr); } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 8px; }
+  #screen { width:100%; max-width:512px; image-rendering:pixelated; background:#000; border-radius:4px; touch-action:none; cursor:crosshair; display:block; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; align-items:center; }
+  button, input[type=text] { background:#2b2e36; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; }
+  button:hover { border-color:var(--dim); }
+  input[type=text] { flex:1; min-width:120px; }
+  .pads { display:grid; grid-template-columns:repeat(8, 1fr); gap:4px; }
+  .pad { aspect-ratio:1; border-radius:4px; background:#2a2c33; position:relative; overflow:hidden; }
+  .pad i { position:absolute; left:0; right:0; bottom:0; background:var(--acc); opacity:.85; height:0; }
+  .steps { display:grid; grid-template-columns:repeat(16, 1fr); gap:3px; margin-top:6px; }
+  .step { height:10px; border-radius:2px; background:#2a2c33; }
+  .step.on { background:var(--warn); }
+  .knobs { display:grid; grid-template-columns:repeat(9, 1fr); gap:4px; margin-top:8px; }
+  .knob { font-size:11px; text-align:center; color:var(--dim); border:1px solid var(--line); border-radius:4px; padding:2px 0; }
+  .knob.touch { border-color:var(--acc); color:var(--fg); }
+  .btns { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
+  .btn { font-size:11px; padding:2px 6px; border-radius:4px; border:1px solid var(--line); color:var(--dim); }
+  .btn.on { background:var(--acc); color:#000; border-color:var(--acc); }
+  #log { font:12px/1.35 ui-monospace, Menlo, monospace; height:220px; overflow:auto; white-space:pre; color:#c9cbd1; }
+  label { color:var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Move Remote</h1>
+  <span id="state">connecting...</span>
+</header>
+<main>
+  <section>
+    <h2>Screen (draw on it)</h2>
+    <canvas id="screen" width="128" height="64"></canvas>
+    <div class="row">
+      <input type="text" id="text" placeholder="text for the screen" maxlength="21">
+      <button id="send-text">Show</button>
+      <button id="clear">Clear</button>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="echo" checked> light what I press</label>
+      <button id="rainbow">Rainbow pads</button>
+      <button id="dark">LEDs off</button>
+      <button id="quit">Back to Move</button>
+    </div>
+  </section>
+  <section>
+    <h2>Surface</h2>
+    <div class="pads" id="pads"></div>
+    <div class="steps" id="steps"></div>
+    <div class="knobs" id="knobs"></div>
+    <div class="btns" id="btns"></div>
+  </section>
+  <section style="grid-column:1/-1">
+    <h2>Input</h2>
+    <div id="log"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const P = { D_HELLO:1, D_INPUT:2, D_AUDIO:3, D_STATUS:4, D_PONG:5, D_BYE:6,
+            H_HELLO:0x81, H_LED:0x82, H_LED_RGB:0x83, H_DISPLAY:0x84, H_CONFIG:0x87, H_PING:0x88, H_QUIT:0x89 };
+const BTN = { 49:"Shift", 50:"Menu", 51:"Back", 52:"Capture", 54:"Down", 55:"Up", 56:"Undo", 58:"Loop", 60:"Copy",
+              62:"Left", 63:"Right", 85:"Play", 86:"Rec", 88:"Mute", 118:"Sample", 119:"Delete",
+              43:"Track 1", 42:"Track 2", 41:"Track 3", 40:"Track 4", 3:"Jog click" };
+const $ = (id) => document.getElementById(id);
+let ws = null, rx = new Uint8Array(0), hello = null;
+const px = new Uint8Array(128 * 64);
+const knobVal = new Array(9).fill(0);
+
+// ---- the surface view
+for (let r = 3; r >= 0; r--) for (let c = 0; c < 8; c++) {
+  const d = document.createElement("div"); d.className = "pad"; d.id = "pad" + (r * 8 + c);
+  d.appendChild(document.createElement("i")); $("pads").appendChild(d);
+}
+for (let i = 0; i < 16; i++) { const d = document.createElement("div"); d.className = "step"; d.id = "step" + i; $("steps").appendChild(d); }
+for (let i = 0; i < 9; i++) { const d = document.createElement("div"); d.className = "knob"; d.id = "knob" + i; d.textContent = (i < 8 ? "K" + (i + 1) : "VOL") + " 0"; $("knobs").appendChild(d); }
+for (const [cc, name] of Object.entries(BTN)) { const d = document.createElement("span"); d.className = "btn"; d.id = "btn" + cc; d.textContent = name; $("btns").appendChild(d); }
+
+// ---- the wire
+function msg(type, payload) {
+  const p = payload || new Uint8Array(0), m = new Uint8Array(3 + p.length);
+  m[0] = (p.length + 1) & 255; m[1] = (p.length + 1) >> 8; m[2] = type; m.set(p, 3);
+  if (ws && ws.readyState === 1) ws.send(m);
+}
+function cfg(key, v) { const p = new Uint8Array(5); p[0] = key; new DataView(p.buffer).setInt32(1, v, true); msg(P.H_CONFIG, p); }
+function padRGB(pad, r, g, b) { msg(P.H_LED_RGB, new Uint8Array([0, 68 + pad, r, g, b])); }
+function led(cc, num, val) { msg(P.H_LED, new Uint8Array([cc ? 0xB0 : 0x90, num, val])); }
+function hsv(h, s, v) {
+  const f = (n) => { const k = (n + h * 6) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+  return [f(5), f(3), f(1)].map((x) => Math.round(x * 255));
+}
+function padColour(pad, level) { const [r, g, b] = hsv((pad % 8) / 8, 0.85, level ? 0.15 + 0.85 * level / 127 : 0.06); padRGB(pad, r, g, b); }
+
+function connect() {
+  const q = new URLSearchParams(location.search);
+  const host = q.get("host") || location.host || "move.local:7720";
+  ws = new WebSocket("ws://" + host + "/ws");
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    const name = new TextEncoder().encode("web " + (navigator.platform || "browser")).slice(0, 32);
+    const p = new Uint8Array(2 + name.length); p[0] = 1; p.set(name, 2);
+    msg(P.H_HELLO, p);
+  };
+  ws.onmessage = (e) => {
+    const d = new Uint8Array(e.data), n = new Uint8Array(rx.length + d.length);
+    n.set(rx); n.set(d, rx.length); rx = n;
+    let off = 0;
+    while (rx.length - off >= 2) {
+      const len = rx[off] | rx[off + 1] << 8;
+      if (rx.length - off < 2 + len) break;
+      onMsg(rx[off + 2], rx.subarray(off + 3, off + 2 + len));
+      off += 2 + len;
+    }
+    rx = rx.slice(off);
+  };
+  ws.onclose = () => { $("state").textContent = "disconnected: retrying..."; $("state").className = ""; setTimeout(connect, 1500); };
+}
+
+function log(line) {
+  const l = $("log"); l.textContent += line + "\n";
+  if (l.textContent.length > 20000) l.textContent = l.textContent.slice(-15000);
+  l.scrollTop = l.scrollHeight;
+}
+
+function onMsg(type, p) {
+  const dv = new DataView(p.buffer, p.byteOffset, p.byteLength);
+  if (type === P.D_HELLO) {
+    hello = { name: new TextDecoder().decode(p.subarray(22, 46)).replace(/\0.*$/, ""), via: p[16] };
+    cfg(1, 0);   // no audio clock: this page plays no sound
+    for (let i = 0; i < 32; i++) padColour(i, 0);
+    $("state").className = "on";
+    $("state").textContent = hello.name + " via " + ["Wi-Fi", "USB", "local"][hello.via];
+    redraw(); sendScreen();
+  } else if (type === P.D_INPUT) {
+    for (let i = 0; i + 8 <= p.length; i += 8) input(dv.getUint32(i, true), p.subarray(i + 4, i + 8));
+  } else if (type === P.D_STATUS) {
+    if (hello) $("state").textContent = hello.name + " via " + ["Wi-Fi", "USB", "local"][hello.via] +
+      "  battery " + p[4] + "  late " + dv.getUint32(16, true) + "  LEDs pending " + dv.getUint16(24, true);
+  } else if (type === P.D_BYE) {
+    $("state").textContent = "the Move said goodbye (" + p[0] + ")"; $("state").className = "";
+  }
+}
+
+function input(frame, k) {
+  const cable = k[0] >> 4, st = k[1] & 0xF0, d1 = k[2], d2 = k[3], hex = [...k].map((b) => b.toString(16).padStart(2, "0")).join(" ");
+  const echo = $("echo").checked;
+  let what = "";
+  if (cable === 2) what = "USB-A MIDI";
+  else if ((k[0] & 15) >= 4 && (k[0] & 15) <= 7) what = "sysex";
+  else if (st === 0x90 || st === 0x80) {
+    const on = st === 0x90 && d2 > 0;
+    if (d1 <= 9) { what = (d1 < 8 ? "knob " + (d1 + 1) : d1 === 8 ? "volume" : "jog") + " touch " + (on ? "on" : "off");
+      $("knob" + Math.min(d1, 8)).classList.toggle("touch", on); }
+    else if (d1 >= 16 && d1 < 32) { what = "step " + (d1 - 15) + (on ? " down" : " up");
+      if (on) { const s = $("step" + (d1 - 16)); s.classList.toggle("on"); if (echo) led(0, d1, s.classList.contains("on") ? 120 : 0); } }
+    else if (d1 >= 68 && d1 < 100) { const pad = d1 - 68; what = "pad " + (pad + 1) + " velocity " + (on ? d2 : 0);
+      $("pad" + pad).firstChild.style.height = (on ? d2 / 1.27 : 0) + "%"; if (echo) padColour(pad, on ? d2 : 0); }
+  } else if (st === 0xA0 && d1 >= 68 && d1 < 100) { const pad = d1 - 68; what = "pad " + (pad + 1) + " pressure " + d2;
+    $("pad" + pad).firstChild.style.height = (d2 / 1.27) + "%"; if (echo) padColour(pad, Math.max(20, d2)); }
+  else if (st === 0xD0) what = "pressure " + d1;
+  else if (st === 0xB0) {
+    const rel = d2 < 64 ? d2 : d2 - 128;
+    if (d1 >= 71 && d1 <= 79) { const i = d1 - 71; knobVal[i] = Math.max(0, Math.min(127, knobVal[i] + rel));
+      what = (i < 8 ? "knob " + (i + 1) : "volume") + " " + (rel > 0 ? "+" : "") + rel;
+      $("knob" + i).textContent = (i < 8 ? "K" + (i + 1) : "VOL") + " " + knobVal[i];
+      if (echo && i < 8) { const [r, g, b] = hsv(i / 8, 1, knobVal[i] / 127); msg(P.H_LED_RGB, new Uint8Array([1, d1, r, g, b])); } }
+    else if (d1 === 14) what = "jog " + (rel > 0 ? "+" : "") + rel;
+    else { what = (BTN[d1] || "cc " + d1) + (d2 ? " down" : " up"); const b = $("btn" + d1); if (b) b.classList.toggle("on", d2 > 0);
+      if (echo && BTN[d1] && d1 !== 3) led(1, d1, d2 ? ([85, 86, 118, 40, 41, 42, 43].includes(d1) ? 126 : 127) : 0); }
+  }
+  log(String(frame).padStart(10) + "  " + hex + "  " + what);
+}
+
+// ---- the screen
+const cv = $("screen"), ctx = cv.getContext("2d");
+function redraw() {
+  const img = ctx.createImageData(128, 64);
+  for (let i = 0; i < px.length; i++) { const v = px[i] ? 255 : 0; img.data.set([v, v, v, 255], i * 4); }
+  ctx.putImageData(img, 0, 0);
+}
+function sendScreen() {
+  const out = new Uint8Array(1024);
+  for (let page = 0; page < 8; page++) for (let x = 0; x < 128; x++) {
+    let v = 0; for (let b = 0; b < 8; b++) if (px[(page * 8 + b) * 128 + x]) v |= 1 << b;
+    out[page * 128 + x] = v;
+  }
+  msg(P.H_DISPLAY, out);
+}
+let drawing = false, lastSend = 0, pending = false, ink = 1;
+function at(e) { const r = cv.getBoundingClientRect(); return [Math.floor((e.clientX - r.left) / r.width * 128), Math.floor((e.clientY - r.top) / r.height * 64)]; }
+function plot(e) {
+  const [x, y] = at(e);
+  for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const X = x + dx, Y = y + dy; if (X >= 0 && X < 128 && Y >= 0 && Y < 64) px[Y * 128 + X] = ink; }
+  redraw();
+  const t = performance.now();
+  if (t - lastSend > 33) { sendScreen(); lastSend = t; } else pending = true;
+}
+cv.addEventListener("pointerdown", (e) => { drawing = true; cv.setPointerCapture(e.pointerId); const [x, y] = at(e); ink = px[y * 128 + x] ? 0 : 1; plot(e); });
+cv.addEventListener("pointermove", (e) => { if (drawing) plot(e); });
+cv.addEventListener("pointerup", () => { drawing = false; if (pending) { sendScreen(); pending = false; } });
+$("clear").onclick = () => { px.fill(0); redraw(); sendScreen(); };
+$("send-text").onclick = () => {
+  const t = $("text").value; const c2 = document.createElement("canvas"); c2.width = 128; c2.height = 64;
+  const g = c2.getContext("2d"); g.fillStyle = "#000"; g.fillRect(0, 0, 128, 64); g.fillStyle = "#fff";
+  g.font = "bold 16px -apple-system, system-ui, sans-serif"; g.textBaseline = "middle"; g.textAlign = "center";
+  g.fillText(t, 64, 32, 124);
+  const d = g.getImageData(0, 0, 128, 64).data;
+  for (let i = 0; i < px.length; i++) px[i] = d[i * 4] > 110 ? 1 : 0;
+  redraw(); sendScreen();
+};
+$("rainbow").onclick = () => { for (let i = 0; i < 32; i++) { const [r, g, b] = hsv(i / 32, 1, 1); padRGB(i, r, g, b); } };
+$("dark").onclick = () => cfg(5, 1);
+$("quit").onclick = () => { if (confirm("Leave Move Remote and start Move's own software?")) msg(P.H_QUIT); };
+connect();
+</script>
+</body>
+</html>
