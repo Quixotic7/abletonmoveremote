@@ -62,6 +62,8 @@ static mr_cfg_t g_cfg;
 
 /* embedding (mr_core.h): set before the threads start, then read only */
 static int g_port_override;
+static const char *g_banner_title, *g_banner_name;
+static int g_banner_port;
 static mr_audio_source_fn g_src;
 static void *g_src_ctx;
 #define ADOPT_MAX 4
@@ -1015,6 +1017,13 @@ static void accept_all(void)
 
 void mr_set_port(int port) { g_port_override = port; }
 
+void mr_set_banner(const char *title, const char *name, int web_port)
+{
+    g_banner_title = title;
+    g_banner_name = name ? name : "";
+    g_banner_port = web_port;
+}
+
 void mr_set_audio_source(mr_audio_source_fn fn, void *ctx)
 {
     g_src_ctx = ctx;
@@ -1151,6 +1160,18 @@ static void draw_status(void)
     uint8_t *px = g_status_px;
     memset(px, 0, MR_SCREEN_BYTES);
     memset(px, 0xFF, MR_SCREEN_W);
+    if (g_banner_title) {   /* an embedder (mr_set_banner): its page's address, no Move Remote port */
+        text_at(px, 2, 0, g_banner_title, 1);
+        text_at(px, 0, 2, "OPEN IN A BROWSER:", 0);
+        text_at(px, 0, 3, g_banner_name, 0);
+        if (g_ip_wifi[0]) {
+            snprintf(line, sizeof line, "%s:%d", g_ip_wifi, g_banner_port);
+            text_at(px, 0, 4, line, 0);
+        }
+        text_at(px, 0, 5, g_active ? "" : "starting...", 0);
+        text_at(px, 0, 7, "SHIFT+VOL+JOG: exit", 0);
+        return;
+    }
     text_at(px, 2, 0, "MOVE REMOTE", 1);
     text_at(px, 128 - 6 * (int)strlen(MR_VERSION) - 2, 0, MR_VERSION, 1);
     snprintf(line, sizeof line, "USB  %s", g_ip_usb[0] ? g_ip_usb : "-");

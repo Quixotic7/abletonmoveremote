@@ -51,8 +51,12 @@ void mr_plat_frame(const uint8_t px[1024]);
  * MR_H_AUDIO queue. fn runs on the rt thread: it must not block, allocate or lock. NULL: the queue again.
  * mr_adopt: any thread; a connected stream socket (a socketpair end) taken as a host connection at the next mr_step,
  * as if it had come in on the listening socket with via = MR_VIA_LOCAL and spoken the plain stream. The descriptor
- * is the core's from then on. 0 queued, -1 the queue is full. */
+ * is the core's from then on. 0 queued, -1 the queue is full.
+ * mr_set_banner: before mr_init; the status screen (shown while no host is active) names the embedder instead:
+ * title on the top bar, then "OPEN IN A BROWSER:", name (e.g. "remotefm1.local:7730") and the Wi-Fi address with
+ * web_port. The strings must outlive the core. */
 typedef int (*mr_audio_source_fn)(void *ctx, int16_t *out, int frames);
+void mr_set_banner(const char *title, const char *name, int web_port);
 void mr_set_port(int port);
 void mr_set_audio_source(mr_audio_source_fn fn, void *ctx);
 int mr_adopt(int fd);
