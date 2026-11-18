@@ -41,4 +41,20 @@ void mr_shutdown(void);
 /* the platform's hook: a frame was published (the Move copies it to Schwung's display mirror) */
 void mr_plat_frame(const uint8_t px[1024]);
 
+/* ---- embedding (a program that runs Move Remote's device code in-process with its own host; Move Remote itself
+ * calls none of these, so its behaviour is unchanged)
+ *
+ * mr_set_port: before mr_init, the port to listen on instead of the platform's (0: the platform's; < 0: no listening
+ * socket at all, the embedder's own connections only).
+ * mr_set_audio_source: before the rt thread starts; the rt thread then takes each block's output from fn (frames
+ * stereo int16 into out; it returns how many it gave, the rest is silence and counts as an underrun) instead of the
+ * MR_H_AUDIO queue. fn runs on the rt thread: it must not block, allocate or lock. NULL: the queue again.
+ * mr_adopt: any thread; a connected stream socket (a socketpair end) taken as a host connection at the next mr_step,
+ * as if it had come in on the listening socket with via = MR_VIA_LOCAL and spoken the plain stream. The descriptor
+ * is the core's from then on. 0 queued, -1 the queue is full. */
+typedef int (*mr_audio_source_fn)(void *ctx, int16_t *out, int frames);
+void mr_set_port(int port);
+void mr_set_audio_source(mr_audio_source_fn fn, void *ctx);
+int mr_adopt(int fd);
+
 #endif

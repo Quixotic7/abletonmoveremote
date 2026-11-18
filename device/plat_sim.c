@@ -69,7 +69,12 @@ static void on_term(int sig)
     mr_request_stop();
 }
 
-int main(int argc, char **argv)
+/* an embedder builds this file with -DMR_PLAT_MAIN=<its name> and calls it from its own main */
+#ifndef MR_PLAT_MAIN
+#define MR_PLAT_MAIN main
+#endif
+int MR_PLAT_MAIN(int argc, char **argv);
+int MR_PLAT_MAIN(int argc, char **argv)
 {
     char dir[400], p[460];
     const char *tmp = getenv("TMPDIR");

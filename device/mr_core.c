@@ -60,6 +60,13 @@ static uint32_t g_overruns, g_dropped;
 
 static mr_cfg_t g_cfg;
 
+/* embedding (mr_core.h): set before the threads start, then read only */
+static int g_port_override;
+static mr_audio_source_fn g_src;
+static void *g_src_ctx;
+#define ADOPT_MAX 4
+static int g_adopt[ADOPT_MAX] = { -1, -1, -1, -1 };
+
 static uint64_t now_ms(void)
 {
     struct timespec ts;
@@ -227,7 +234,11 @@ void mr_rt_block(const uint8_t *in, int nin, const int16_t *ain, int16_t *aout, 
         g_flush_aout = 0;
         R.playing = 0;
     }
-    take = (int)mr_ring_pop(&r_aout, aout, MR_BLOCK);
+    if (g_src) {
+        take = g_src(g_src_ctx, aout, MR_BLOCK);
+        take = take < 0 ? 0 : take > MR_BLOCK ? MR_BLOCK : take;
+    } else
+        take = (int)mr_ring_pop(&r_aout, aout, MR_BLOCK);
     if (take < MR_BLOCK) {
         memset(aout + take * 2, 0, (size_t)(MR_BLOCK - take) * 4);
         if (R.playing) {
@@ -1002,6 +1013,65 @@ static void accept_all(void)
     }
 }
 
+void mr_set_port(int port) { g_port_override = port; }
+
+void mr_set_audio_source(mr_audio_source_fn fn, void *ctx)
+{
+    g_src_ctx = ctx;
+    __atomic_store_n(&g_src, fn, __ATOMIC_RELEASE);
+}
+
+int mr_adopt(int fd)
+{
+    int i;
+    for (i = 0; i < ADOPT_MAX; i++) {
+        int none = -1;
+        if (__atomic_compare_exchange_n(&g_adopt[i], &none, fd, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            if (g_wake[1] >= 0)
+                wake_main();
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void adopt_all(void)   /* the embedder's connections (mr_adopt), as accept_all takes the network's */
+{
+    int i, k;
+    for (k = 0; k < ADOPT_MAX; k++) {
+        const int fd = __atomic_exchange_n(&g_adopt[k], -1, __ATOMIC_ACQ_REL);
+        conn_t *c = NULL;
+        int one = 1;
+        if (fd < 0)
+            continue;
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
+#ifdef SO_NOSIGPIPE
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+        (void)one;
+        for (i = 0; i < MAX_CONNS; i++)
+            if (g_conns[i].fd < 0) {
+                c = &g_conns[i];
+                break;
+            }
+        if (!c) {
+            close(fd);
+            continue;
+        }
+        c->fd = fd;
+        c->kind = C_TCP;
+        c->via = MR_VIA_LOCAL;
+        c->in = malloc(IN_CAP);
+        c->raw = malloc(IN_CAP + 1);
+        c->out = malloc(OUT_CAP);
+        c->born = now_ms();
+        strcpy(c->name, "?");
+        if (!c->in || !c->raw || !c->out)
+            conn_free(c);
+    }
+}
+
 static int listen_on(int port)
 {
     int fd = socket(AF_INET6, SOCK_STREAM, 0), one = 1, zero = 0;
@@ -1211,6 +1281,8 @@ int mr_init(const mr_cfg_t *cfg)
 {
     int i;
     g_cfg = *cfg;
+    if (g_port_override)
+        g_cfg.port = g_port_override;
     if (!g_cfg.port)
         g_cfg.port = MR_PORT;
     if (!g_cfg.test_dir)
@@ -1227,11 +1299,13 @@ int mr_init(const mr_cfg_t *cfg)
         fcntl(g_wake[i], F_SETFL, fcntl(g_wake[i], F_GETFL) | O_NONBLOCK);
         fcntl(g_wake[i], F_SETFD, FD_CLOEXEC);
     }
-    if ((g_listen = listen_on(g_cfg.port)) < 0) {
+    if (g_cfg.port < 0)
+        logf_("net: no listening socket (embedded)");
+    else if ((g_listen = listen_on(g_cfg.port)) < 0) {
         logf_("net: cannot listen on port %d: %s", g_cfg.port, strerror(errno));
         return -1;
-    }
-    logf_("net: listening on port %d", g_cfg.port);
+    } else
+        logf_("net: listening on port %d", g_cfg.port);
     test_open();
     read_ips();
     draw_status();
@@ -1313,6 +1387,7 @@ int mr_step(int max_wait_ms)
     }
     if (pf[1].revents & POLLIN)
         accept_all();
+    adopt_all();
     for (i = 2; i < np; i++) {
         conn_t *c = pc[i];
         if (c->fd != pf[i].fd)
