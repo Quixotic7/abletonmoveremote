@@ -42,8 +42,9 @@ There are two ways to do it:
   1. A wss endpoint on the Move. Needs a certificate the browser trusts.
   2. A player page served by the Move itself over http.
   3. A small local bridge.
-
-  Web comes last.
+  4. **A bridge window (Move Remote 0.1.1):** the https page opens `http://<move>:7720/bridge` with `window.open()`
+     from a click; that plain-http window opens the WebSocket to its own host and relays it over `postMessage`.
+     RemoteFM1's `MoveLink` speaks to it. Protocol: [PROTOCOL.md, "The bridge"](PROTOCOL.md#the-bridge-https-pages).
 
 ## The mapping (a proposal)
 
@@ -86,7 +87,7 @@ about 93 ms, which is too slow to play live, so the switch says so.
    frames for the screen views. Testable headless, against `moveremote-sim`.
 2. **FM1VST (Mac).** The first host: Move in the device picker, the panel driven by it, sound on the Mac or the Move.
 3. **iOS** (RFMKit).
-4. **Android** and **the web**, after a decision on wss.
+4. **Android** and **the web** (the web through the bridge window).
 
 ## Open questions
 

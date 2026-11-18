@@ -16,6 +16,13 @@ build/host/mrctl --host 127.0.0.1 --port $PORT selftest --inject "$DIR/mr-cmd" |
 if curl -s "http://127.0.0.1:$PORT/" | grep -q "<title>Move Remote</title>"; then echo "  ok    the page"
 else echo "  FAIL  the page"; fail=1; fi
 
+HDRS=$(curl -s -D - -o "$DIR/bridge.html" "http://127.0.0.1:$PORT/bridge" | tr -d '\r')
+if grep -q "^HTTP/1.1 200" <<<"$HDRS" && grep -qi "^Content-Type: text/html" <<<"$HDRS" \
+    && grep -q 'mr: "hello"' "$DIR/bridge.html"; then echo "  ok    the bridge page"
+else echo "  FAIL  the bridge page"; fail=1; fi
+if command -v node >/dev/null; then node tests/bridge_check.mjs $PORT || fail=1
+else echo "  skip  bridge_check.mjs (no node)"; fi
+
 # (curl, not nc: the BSD and Linux nc part differently from a connection left open, and a WebSocket stays open)
 ACCEPT=$(curl -s -i -N --max-time 1 -H "Connection: Upgrade" -H "Upgrade: websocket" \
     -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" "http://127.0.0.1:$PORT/ws" \

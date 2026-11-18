@@ -105,7 +105,7 @@ is on when `/dev/shm/mr-test` exists at launch, which `deploy.sh --test` arrange
 | `device/` | the Move side: `mr_core.c` (rings, LEDs, network, status screen, test hook), `plat_move.c` (SPI, real-time audio thread), `plat_sim.c` (the simulator), `heal.c` (the real-time helper) |
 | `host/`, `include/moveremote/` | `libmoveremote`: the client, decoding, a 1-bit canvas |
 | `tools/mrctl.c` | the terminal host |
-| `web/index.html` | the page the Move serves |
+| `web/index.html`, `web/bridge.html` | the page the Move serves, and the bridge window for https pages (RemoteFM1) |
 | `module/` | what Schwung installs: `module.json`, `standalone` |
 | `docs/` | [PROTOCOL.md](docs/PROTOCOL.md), [REMOTEFM1.md](docs/REMOTEFM1.md) (the Move as a RemoteFM1 surface) |
 

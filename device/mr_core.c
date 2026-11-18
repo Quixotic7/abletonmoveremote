@@ -35,6 +35,7 @@
 #include "../include/moveremote/proto.h"
 #include "mr_ws.h"
 #include "web_page.h"   /* build/gen: web/index.html as mr_web_page[] / mr_web_page_len */
+#include "bridge_page.h" /* build/gen: web/bridge.html as mr_bridge_page[] / mr_bridge_page_len */
 
 /* ------------------------------------------------------------------ shared state --- */
 typedef struct { uint32_t frame; uint8_t pkt[4]; } in_rec_t;
@@ -840,12 +841,22 @@ static void http_request(conn_t *c)
         c->raw_n = 0;   /* (a client waits for the 101 before it sends a frame) */
         return;
     }
+    path[strcspn(path, "?#")] = 0;   /* (the bridge takes ?origin=, which is the page's business) */
+    const unsigned char *page = NULL;
+    unsigned page_len = 0;
     if (!strcmp(path, "/") || !strcmp(path, "/index.html")) {
+        page = mr_web_page;
+        page_len = mr_web_page_len;
+    } else if (!strcmp(path, "/bridge") || !strcmp(path, "/bridge.html")) {
+        page = mr_bridge_page;
+        page_len = mr_bridge_page_len;
+    }
+    if (page) {
         const int n = snprintf(resp, sizeof resp,
                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %u\r\n"
-                               "Cache-Control: no-store\r\nConnection: close\r\n\r\n", (unsigned)mr_web_page_len);
+                               "Cache-Control: no-store\r\nConnection: close\r\n\r\n", page_len);
         if (out_put(c, resp, (size_t)n) == 0)
-            out_put(c, mr_web_page, mr_web_page_len);
+            out_put(c, page, page_len);
     } else {
         static const char nf[] = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         out_put(c, nf, sizeof nf - 1);
