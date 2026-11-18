@@ -11,7 +11,7 @@ CC ?= cc
 B := build/$(TARGET)
 CFLAGS ?= -O2 -g
 WARN := -std=gnu11 -Wall -Wextra
-GEN := build/gen/web_page.h
+GEN := build/gen/web_page.h build/gen/bridge_page.h
 
 DEV_SRC := device/mr_core.c device/mr_ws.c common/font5x7.c
 DEV_HDR := $(wildcard device/*.h common/*.h include/moveremote/*.h) $(GEN)
@@ -24,9 +24,12 @@ sim: build/sim/moveremote-sim
 host: build/host/libmoveremote.a build/host/mrctl
 
 # the page the device serves, as a C array (made here, on the Mac: the Docker image has no xxd)
-$(GEN): web/index.html
+build/gen/web_page.h: web/index.html
 	mkdir -p build/gen
-	cd web && xxd -i index.html | sed 's/index_html/mr_web_page/g' > ../$(GEN)
+	cd web && xxd -i index.html | sed 's/index_html/mr_web_page/g' > ../$@
+build/gen/bridge_page.h: web/bridge.html
+	mkdir -p build/gen
+	cd web && xxd -i bridge.html | sed 's/bridge_html/mr_bridge_page/g' > ../$@
 
 build/sim/moveremote-sim: device/plat_sim.c $(DEV_SRC) $(DEV_HDR)
 	mkdir -p build/sim

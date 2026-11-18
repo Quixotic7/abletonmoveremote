@@ -14,7 +14,7 @@ One byte stream, whichever way it travels:
 
 USB networking stays up while Move's own software is stopped, so "USB" and "Wi-Fi" are the same protocol on two
 addresses. Plain TCP and WebSocket share the port: a connection that opens with `GET ` is HTTP (`/` serves the
-built-in page, `/ws` upgrades), anything else is the plain stream. A WebSocket's binary frames carry the stream in
+built-in page, `/bridge` the bridge window below, `/ws` upgrades), anything else is the plain stream. A WebSocket's binary frames carry the stream in
 any chunking: a message may span frames, and a frame may hold several messages.
 
 ## Framing
@@ -150,3 +150,33 @@ up to about 57 times a second; a host need not pace its writes.
   wedged one.
 - **Power:** the power button held for 2 s powers the Move off (`BYE(3)`).
 - **Speaker:** with Move's software stopped there is no speaker EQ (Schwung's `speaker_eq.c` is not applied yet).
+
+## The bridge (https pages)
+
+Safari, Firefox and older Edge will not open `ws://` from an https page. So `http://<move>:7720/bridge` (also
+`/bridge.html`, `Cache-Control: no-store`, source `web/bridge.html`) is a small plain-http window: the https page opens
+it with `window.open()` from a click, the bridge opens `ws://<its own host>/ws` (same origin, no mixed content) and
+relays the byte stream to `window.opener` over `postMessage`. No TLS. Bridge protocol version 1; every message is an
+object with a field `mr`.
+
+- **Origins:** `https://remotefm1.com`, `https://www.remotefm1.com`, any `http://localhost:<port>`,
+  `http://127.0.0.1:<port>`, `http://[::1]:<port>`, and one more given as `?origin=<urlencoded origin>` if it is
+  https or loopback.
+- **Start:** with no `window.opener` the window says so and does nothing. Otherwise it posts `{mr:"hello", v:1}` to
+  the opener once per allowed origin as targetOrigin (the two remotefm1.com ones and the `?origin` one), so only the
+  matching one gets it.
+- **Who it listens to:** only messages whose `source` is the opener and whose origin is allowed. The first such origin
+  becomes the peer; after that the bridge listens to and posts to that origin only.
+
+| Direction | Message | Meaning |
+|---|---|---|
+| opener → bridge | `{mr:"open"}` | open (or reopen) `ws://<host>/ws`, binaryType arraybuffer |
+| opener → bridge | `{mr:"send", data:ArrayBuffer}` | send it as one binary frame; dropped if the socket is not open |
+| opener → bridge | `{mr:"close"}` | close the socket, then `window.close()` |
+| bridge → opener | `{mr:"open"}` | the socket opened |
+| bridge → opener | `{mr:"data", data:ArrayBuffer}` | one incoming WebSocket message, the buffer transferred |
+| bridge → opener | `{mr:"close", code, reason}` | the socket closed |
+| bridge → opener | `{mr:"error"}` | the socket reported an error |
+
+The bridge checks `window.opener.closed` once a second and, when the opener is gone, closes the socket and itself.
+`data` is the raw stream in any chunking, as on the WebSocket.
