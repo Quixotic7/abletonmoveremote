@@ -5,6 +5,7 @@
  *   rt thread -> main    r_in (surface + USB-A events), r_ain (input pcm), r_batch (audio clock ticks)
  *   main -> rt thread    r_led (LED writes, grouped so a SysEx never splits), r_mout (USB-A out), r_aout (output pcm),
  *                        r_inject (the test hook's pretend presses)
+ *   embedder <-> rt      (mr_set_usba_in only) r_uin (USB-A in), r_umout (USB-A out: mr_usba_send)
  *
  * The exit gesture (Shift + volume knob touch + jog click) and the power button's acknowledgement are decided on the
  * rt thread, from the raw events, whatever the host is doing. */
@@ -42,7 +43,7 @@ typedef struct { uint32_t frame; uint8_t pkt[4]; } in_rec_t;
 typedef struct { uint8_t n, pad[3]; uint8_t pkt[6][4]; } led_rec_t;
 typedef struct { uint32_t frame; uint16_t nframes, fill, pcm; uint8_t flags, pad; } batch_rec_t;
 
-static mr_ring_t r_in, r_ain, r_batch, r_led, r_mout, r_aout, r_inject;
+static mr_ring_t r_in, r_ain, r_batch, r_led, r_mout, r_aout, r_inject, r_uin, r_umout;
 
 static int g_wake[2] = { -1, -1 };
 static volatile int g_wake_pending;
@@ -68,6 +69,11 @@ static mr_audio_source_fn g_src;
 static void *g_src_ctx;
 #define ADOPT_MAX 4
 static int g_adopt[ADOPT_MAX] = { -1, -1, -1, -1 };
+/* USB-A for the embedder (mr_set_usba_in): its callback, the packets per transfer, the counters */
+static mr_usba_in_fn g_uin_fn;
+static void *g_uin_ctx;
+static volatile int g_usba_cap = MR_OUT_MAX - 6;
+static volatile uint32_t g_usba_in, g_usba_in_dropped, g_usba_out;
 
 static uint64_t now_ms(void)
 {
@@ -181,6 +187,13 @@ static void rt_event(const uint8_t p[4])
         else if (st == 0xB0 && p[2] == MR_CC_LINE_OUT)
             g_jacks = (g_jacks & ~2) | ((p[3] >= 64) << 1);
     }
+    if (cable == 2 && g_uin_fn) {   /* the embedder's: not the host connection's */
+        if (mr_ring_push(&r_uin, p, 1))
+            g_usba_in++;
+        else
+            g_usba_in_dropped++;
+        return;
+    }
     {
         in_rec_t rec;
         rec.frame = g_frame;
@@ -188,6 +201,41 @@ static void rt_event(const uint8_t p[4])
         if (!mr_ring_push(&r_in, &rec, 1))
             g_in_dropped++;
     }
+}
+
+/* USB-A out: at most g_usba_cap packets a transfer, from the host's queue (MR_H_MIDI) and the embedder's
+ * (mr_usba_send). A SysEx under way finishes from its own queue before the other one gets a turn, so the two never
+ * interleave on the cable (both queue a SysEx whole, so one started always ends) */
+static int usba_take(uint8_t out[][4], int room)
+{
+    static int src = -1;   /* 0 r_mout, 1 r_umout: the queue of a SysEx under way */
+    static int turn;       /* the queue tried first otherwise (they alternate message by message) */
+    int k = 0;
+    if (room > g_usba_cap)
+        room = g_usba_cap;
+    while (k < room) {
+        int q = src >= 0 ? src : turn, got, cin;
+        mr_ring_t *r = q ? &r_umout : &r_mout;
+        got = r->buf && mr_ring_pop(r, out[k], 1);
+        if (!got && src < 0) {
+            q = !q;
+            r = q ? &r_umout : &r_mout;
+            got = r->buf && mr_ring_pop(r, out[k], 1);
+        }
+        if (!got)
+            break;
+        cin = out[k][0] & 0x0F;
+        if (cin == 0x4)
+            src = q;
+        else {
+            src = -1;
+            turn = !q;
+        }
+        if (q)
+            g_usba_out++;
+        k++;
+    }
+    return k;
 }
 
 void mr_rt_late(void) { g_late++; }
@@ -218,8 +266,7 @@ void mr_rt_block(const uint8_t *in, int nin, const int16_t *ain, int16_t *aout, 
         n += 3;
         R.ack_pending = 0;
     }
-    while (n < MR_OUT_MAX - 6 && mr_ring_pop(&r_mout, out[n], 1))
-        n++;
+    n += usba_take(out + n, MR_OUT_MAX - 6 - n);
     for (;;) {
         const led_rec_t *g = mr_ring_peek(&r_led);
         if (!g || n + g->n > MR_OUT_MAX)
@@ -537,7 +584,7 @@ static void send_status(conn_t *c)
 
 /* USB-A out: complete MIDI messages to USB-MIDI packets on cable 2. SysEx goes 3 bytes a packet (CIN 4), ending with
  * CIN 5/6/7; an unterminated SysEx, a stray data byte or a short message is dropped */
-static void midi_out(const uint8_t *p, size_t n)
+static void midi_out_to(mr_ring_t *r, const uint8_t *p, size_t n)
 {
     size_t i = 0;
     while (i < n) {
@@ -551,6 +598,10 @@ static void midi_out(const uint8_t *p, size_t n)
                 i = j;
                 continue;
             }
+            if ((j - i + 1 + 2) / 3 > mr_ring_space(r)) {   /* whole or not at all: a SysEx started always ends */
+                i = j + 1;
+                continue;
+            }
             {
                 size_t k = i, left = j - i + 1;
                 while (left > 0) {
@@ -558,7 +609,7 @@ static void midi_out(const uint8_t *p, size_t n)
                     memset(pkt, 0, 4);
                     memcpy(pkt + 1, p + k, take);
                     pkt[0] = (uint8_t)(0x20 | (left > 3 ? 0x4 : (uint8_t)(0x4 + take)));
-                    if (!mr_ring_push(&r_mout, pkt, 1))
+                    if (!mr_ring_push(r, pkt, 1))
                         return;
                     k += take, left -= take;
                 }
@@ -568,7 +619,7 @@ static void midi_out(const uint8_t *p, size_t n)
         }
         if (b >= 0xF8) {   /* real time: clock, start, stop, continue ... */
             pkt[0] = 0x2F, pkt[1] = b;
-            mr_ring_push(&r_mout, pkt, 1);
+            mr_ring_push(r, pkt, 1);
             i++;
             continue;
         }
@@ -597,12 +648,43 @@ static void midi_out(const uint8_t *p, size_t n)
                 if (ok) {
                     pkt[0] = (uint8_t)(0x20 | cin);
                     memcpy(pkt + 1, p + i, (size_t)len);
-                    mr_ring_push(&r_mout, pkt, 1);
+                    mr_ring_push(r, pkt, 1);
                 }
             }
             i += (size_t)len;
         }
     }
+}
+
+static void midi_out(const uint8_t *p, size_t n) { midi_out_to(&r_mout, p, n); }
+
+/* how many USB-MIDI packets midi_out_to makes of these bytes (whole messages only, as it sends them) */
+static int midi_packets(const uint8_t *p, size_t n)
+{
+    size_t i = 0;
+    int k = 0;
+    while (i < n) {
+        const uint8_t b = p[i];
+        if (b == 0xF0) {
+            size_t j = i + 1;
+            while (j < n && p[j] != 0xF7 && p[j] < 0x80)
+                j++;
+            if (j < n && p[j] == 0xF7)
+                k += (int)((j - i + 1 + 2) / 3);
+            i = j < n && p[j] == 0xF7 ? j + 1 : j;
+        } else if (b >= 0xF8) {
+            k++, i++;
+        } else if (b < 0x80 || b == 0xF7 || b == 0xF4 || b == 0xF5) {
+            i++;
+        } else {
+            const int len = b < 0xF0 ? (((b & 0xF0) == 0xC0 || (b & 0xF0) == 0xD0) ? 2 : 3)
+                            : (b == 0xF1 || b == 0xF3) ? 2 : b == 0xF2 ? 3 : 1;
+            if (i + (size_t)len <= n)
+                k++;
+            i += (size_t)len;
+        }
+    }
+    return k;
 }
 
 static void become_active(conn_t *c)
@@ -1310,6 +1392,8 @@ int mr_init(const mr_cfg_t *cfg)
         g_cfg.test_dir = "/dev/shm";
     for (i = 0; i < MAX_CONNS; i++)
         g_conns[i].fd = -1;
+    if (g_uin_fn && (mr_ring_init(&r_uin, 4, 2048) || mr_ring_init(&r_umout, 4, 4096)))
+        return -1;
     if (mr_ring_init(&r_in, sizeof(in_rec_t), 4096) || mr_ring_init(&r_ain, 4, 16384) ||
         mr_ring_init(&r_batch, sizeof(batch_rec_t), 512) || mr_ring_init(&r_led, sizeof(led_rec_t), 256) ||
         mr_ring_init(&r_mout, 4, 1024) || mr_ring_init(&r_aout, 4, 16384) || mr_ring_init(&r_inject, 4, 256))
@@ -1506,4 +1590,52 @@ void mr_shutdown(void)
         close(g_test_fd);
         unlink(g_test_path[0]);
     }
+}
+
+/* ------------------------------------------------------------------ USB-A for an embedder (mr_core.h) --- */
+void mr_set_usba_in(mr_usba_in_fn fn, void *ctx)
+{
+    g_uin_ctx = ctx;
+    g_uin_fn = fn;
+}
+
+void mr_set_usba_cap(int pkts) { g_usba_cap = pkts < 1 ? 1 : pkts > MR_OUT_MAX - 6 ? MR_OUT_MAX - 6 : pkts; }
+
+int mr_usba_poll(void)
+{
+    uint8_t pk[64][4];
+    uint32_t n;
+    int total = 0;
+    if (!g_uin_fn || !r_uin.buf)
+        return 0;
+    while ((n = mr_ring_pop(&r_uin, pk, 64)) > 0) {
+        g_uin_fn(g_uin_ctx, (const uint8_t(*)[4])pk, (int)n);
+        total += (int)n;
+    }
+    return total;
+}
+
+int mr_usba_send(const uint8_t *msgs, size_t n)
+{
+    const int k = midi_packets(msgs, n);
+    if (!r_umout.buf)
+        return -1;
+    if (k == 0)
+        return 0;
+    if ((uint32_t)k > mr_ring_space(&r_umout))
+        return -1;
+    midi_out_to(&r_umout, msgs, n);
+    return k;
+}
+
+int mr_usba_queued(void) { return r_umout.buf ? (int)mr_ring_count(&r_umout) : 0; }
+
+void mr_usba_stats(uint32_t *in, uint32_t *in_dropped, uint32_t *out)
+{
+    if (in)
+        *in = g_usba_in;
+    if (in_dropped)
+        *in_dropped = g_usba_in_dropped;
+    if (out)
+        *out = g_usba_out;
 }

@@ -9,6 +9,7 @@
 #ifndef MR_CORE_H
 #define MR_CORE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define MR_VERSION "0.1.1"
@@ -60,5 +61,39 @@ void mr_set_banner(const char *title, const char *name, int web_port);
 void mr_set_port(int port);
 void mr_set_audio_source(mr_audio_source_fn fn, void *ctx);
 int mr_adopt(int fd);
+
+/* ---- USB-A for an embedder (an FM-1 on the Move's USB-A port, RemoteFM14Move): Move Remote itself calls none of
+ * these, so without them its USB-A goes to and from the host connection as before (MR_D_INPUT, MR_H_MIDI).
+ *
+ * mr_set_usba_in: before mr_init. fn non-NULL: USB-A input (cable 2) no longer goes to the host connection; the rt
+ * thread queues it, and the embedder's own thread gets it with mr_usba_poll(), which calls fn (on that thread) with
+ * the packets waiting, as they came (USB-MIDI packets: cable 2, CIN, 3 bytes). mr_usba_send then works too.
+ * mr_usba_send: one embedder thread; complete MIDI messages (SysEx allowed) to the device on USB-A through the same
+ * packetizer as MR_H_MIDI, queued whole or not at all: the packets queued, 0 nothing to send, -1 no room now (4096
+ * packets queue) or no mr_set_usba_in. mr_usba_queued: the packets still waiting.
+ * mr_set_usba_cap: USB-A packets per SPI transfer at most, 1..MR_OUT_MAX - 6 (the default: MR_OUT_MAX - 6), so the
+ * Move's LED writes keep their share of each transfer (a transfer takes MR_OUT_MAX packets; USB-A goes first).
+ * About 3 SysEx bytes a packet: 8 a transfer is about 8.3 KB/s. Any time.
+ * mr_usba_stats: packets in (to the embedder), in dropped (its queue full), out (from mr_usba_send) so far. */
+typedef void (*mr_usba_in_fn)(void *ctx, const uint8_t (*pkts)[4], int n);
+void mr_set_usba_in(mr_usba_in_fn fn, void *ctx);
+int mr_usba_poll(void);
+int mr_usba_send(const uint8_t *msgs, size_t n);
+int mr_usba_queued(void);
+void mr_set_usba_cap(int pkts);
+void mr_usba_stats(uint32_t *in, uint32_t *in_dropped, uint32_t *out);
+
+/* ---- the simulator's USB-A (plat_sim.c only; tests): a fake device behind a model of the Move's surface
+ * controller, which bridges USB-A MIDI into the SPI transfers. Device -> Move: mr_sim_usba_dev_send() puts packets
+ * into the bridge's buffer (MR_SIM_BRIDGE_PKTS); what does not fit is lost, as on the Move (a burst of more than
+ * ~200 bytes); each transfer takes at most MR_SIM_BRIDGE_IN of them. Move -> device: each transfer's cable-2
+ * packets, for mr_sim_usba_dev_recv(). Unplugged (mr_sim_usba_plug(0), the start): nothing goes either way.
+ * mr_sim_counts: LED (cable 0) packets and USB-A packets sent to the surface, USB-A packets lost in the bridge. */
+#define MR_SIM_BRIDGE_PKTS 72
+#define MR_SIM_BRIDGE_IN 31
+void mr_sim_usba_plug(int on);
+int mr_sim_usba_dev_send(const uint8_t (*pkts)[4], int n);   /* the packets taken (the rest lost) */
+int mr_sim_usba_dev_recv(uint8_t (*pkts)[4], int max);
+void mr_sim_counts(uint32_t *led_pkts, uint32_t *usba_out_pkts, uint32_t *bridge_lost);
 
 #endif

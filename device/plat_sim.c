@@ -4,7 +4,10 @@
  * 440 Hz tone so a host can see it arrive, and the output goes nowhere but the peak meter.
  *
  *   moveremote-sim [--port N] [--dir DIR]     DIR holds mr-test / mr-cmd / mr-state / mr-screen.pbm
- *                                              (default $TMPDIR/moveremote-sim) */
+ *                                              (default $TMPDIR/moveremote-sim)
+ *
+ * USB-A (mr_core.h mr_sim_*, for an embedder's tests): a fake device behind a model of the surface controller's
+ * bridge. Nothing is plugged in until mr_sim_usba_plug(1). */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <math.h>
@@ -17,10 +20,51 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../common/ring.h"
 #include "../include/moveremote/proto.h"
 #include "mr_core.h"
 
 static volatile int g_audio_stop;
+
+/* ---- USB-A: the device's packets wait in the bridge (at most MR_SIM_BRIDGE_PKTS, the rest lost), each transfer
+ * takes up to MR_SIM_BRIDGE_IN; the transfer's cable-2 packets go to the device */
+static mr_ring_t g_br_in, g_br_out;    /* device -> Move (the bridge's buffer), Move -> device */
+static volatile int g_plugged;
+static volatile uint32_t g_led_pkts, g_usba_pkts, g_br_lost;
+
+void mr_sim_usba_plug(int on) { __atomic_store_n(&g_plugged, on ? 1 : 0, __ATOMIC_RELEASE); }
+
+int mr_sim_usba_dev_send(const uint8_t (*pkts)[4], int n)
+{
+    int i, took = 0;
+    if (!g_plugged || !g_br_in.buf)
+        return 0;
+    for (i = 0; i < n; i++) {
+        uint8_t p[4];
+        memcpy(p, pkts[i], 4);
+        p[0] = (uint8_t)(0x20 | (p[0] & 0x0F));   /* the bridge's cable */
+        if (mr_ring_count(&g_br_in) >= MR_SIM_BRIDGE_PKTS || !mr_ring_push(&g_br_in, p, 1))
+            __atomic_add_fetch(&g_br_lost, 1, __ATOMIC_RELAXED);
+        else
+            took++;
+    }
+    return took;
+}
+
+int mr_sim_usba_dev_recv(uint8_t (*pkts)[4], int max)
+{
+    return g_br_out.buf ? (int)mr_ring_pop(&g_br_out, pkts, (uint32_t)(max < 0 ? 0 : max)) : 0;
+}
+
+void mr_sim_counts(uint32_t *led_pkts, uint32_t *usba_out_pkts, uint32_t *bridge_lost)
+{
+    if (led_pkts)
+        *led_pkts = g_led_pkts;
+    if (usba_out_pkts)
+        *usba_out_pkts = g_usba_pkts;
+    if (bridge_lost)
+        *bridge_lost = g_br_lost;
+}
 
 void mr_plat_frame(const uint8_t px[1024]) { (void)px; }
 
@@ -34,6 +78,7 @@ static uint64_t now_us(void)
 static void *audio_main(void *arg)
 {
     uint8_t out[MR_OUT_MAX][4];
+    uint8_t in[MR_SIM_BRIDGE_IN * 8];
     int16_t ain[MR_BLOCK * 2], aout[MR_BLOCK * 2];
     uint8_t serving[MR_SCREEN_BYTES];
     uint64_t next = now_us();
@@ -50,7 +95,26 @@ static void *audio_main(void *arg)
             ph = fmod(ph, 2.0 * M_PI);
         if (blk++ % 6 == 0)
             mr_rt_display(serving);
-        mr_rt_block(NULL, 0, ain, aout, out, &nout);
+        {
+            int nin = 0, k;
+            const int plugged = __atomic_load_n(&g_plugged, __ATOMIC_ACQUIRE);
+            uint8_t p[4];
+            memset(in, 0, sizeof in);
+            while (nin < MR_SIM_BRIDGE_IN && mr_ring_pop(&g_br_in, p, 1))
+                if (plugged)
+                    memcpy(in + 8 * nin++, p, 4);
+            mr_rt_block(in, nin, ain, aout, out, &nout);
+            for (k = 0; k < nout; k++) {
+                const int cable = out[k][0] >> 4;
+                if (cable == 0)
+                    g_led_pkts++;
+                else if (cable == 2) {
+                    g_usba_pkts++;
+                    if (plugged)
+                        mr_ring_push(&g_br_out, out[k], 1);
+                }
+            }
+        }
         next += 2902;
         {
             const uint64_t t = now_us();
@@ -100,6 +164,8 @@ int MR_PLAT_MAIN(int argc, char **argv)
         fclose(f);
     }
     cfg.test_dir = dir;
+    if (mr_ring_init(&g_br_in, 4, 128) || mr_ring_init(&g_br_out, 4, 8192))
+        return 1;
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
     signal(SIGPIPE, SIG_IGN);
