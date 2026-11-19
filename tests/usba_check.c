@@ -13,6 +13,15 @@
 void mr_plat_frame(const uint8_t px[1024]) { (void)px; }
 
 static uint8_t g_got[4096][4];
+static int16_t g_ain[MR_BLOCK * 2];
+static int g_ain_calls, g_ain_frames;
+static void on_ain(void *ctx, const int16_t *in, int frames)
+{
+    (void)ctx;
+    memcpy(g_ain, in, sizeof g_ain);
+    g_ain_calls++;
+    g_ain_frames = frames;
+}
 static int g_ngot, g_fails;
 
 static void on_usba(void *ctx, const uint8_t (*p)[4], int n)
@@ -106,6 +115,24 @@ int main(void)
         uint32_t a, b, c;
         mr_usba_stats(&a, &b, &c);
         CHECK(a == 1 && b == 0 && c >= 101, "stats: in %u dropped %u out %u", a, b, c);
+    }
+    {   /* the audio input sink (mr_set_audio_in_sink): each block's input pcm, as it came; silence without one */
+        int16_t ain[MR_BLOCK * 2];
+        for (i = 0; i < MR_BLOCK * 2; i++)
+            ain[i] = (int16_t)(i * 37 - 4000);
+        mr_rt_block(in, 0, ain, aout, out, &nout);
+        CHECK(g_ain_calls == 0, "no sink: nothing called");
+        mr_set_audio_in_sink(on_ain, NULL);
+        mr_rt_block(in, 0, ain, aout, out, &nout);
+        CHECK(g_ain_calls == 1 && g_ain_frames == MR_BLOCK && !memcmp(g_ain, ain, sizeof ain),
+              "the sink gets the block's input pcm (%d calls, %d frames)", g_ain_calls, g_ain_frames);
+        mr_rt_block(in, 0, NULL, aout, out, &nout);
+        for (i = 0, k = 0; i < MR_BLOCK * 2; i++)
+            k |= g_ain[i];
+        CHECK(g_ain_calls == 2 && k == 0, "no input pcm: silence");
+        mr_set_audio_in_sink(NULL, NULL);
+        mr_rt_block(in, 0, ain, aout, out, &nout);
+        CHECK(g_ain_calls == 2, "the sink off: not called");
     }
     mr_shutdown();
     rmdir(dir);

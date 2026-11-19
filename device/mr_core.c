@@ -67,6 +67,8 @@ static const char *g_banner_title, *g_banner_name;
 static int g_banner_port;
 static mr_audio_source_fn g_src;
 static void *g_src_ctx;
+static mr_audio_in_fn g_ain_fn;   /* (mr_set_audio_in_sink) */
+static void *g_ain_ctx;
 #define ADOPT_MAX 4
 static int g_adopt[ADOPT_MAX] = { -1, -1, -1, -1 };
 /* USB-A for the embedder (mr_set_usba_in): its callback, the packets per transfer, the counters */
@@ -276,6 +278,15 @@ void mr_rt_block(const uint8_t *in, int nin, const int16_t *ain, int16_t *aout, 
         mr_ring_pop(&r_led, NULL, 1);
     }
     *nout = n;
+
+    /* ---- audio in for the embedder (mr_set_audio_in_sink), before its source gives this block's output */
+    {
+        const mr_audio_in_fn fn = __atomic_load_n(&g_ain_fn, __ATOMIC_ACQUIRE);
+        if (fn) {
+            static const int16_t silence[MR_BLOCK * 2];
+            fn(g_ain_ctx, ain ? ain : silence, MR_BLOCK);
+        }
+    }
 
     /* ---- audio out: the host's queue, scaled, faded in from the start */
     if (g_flush_aout) {
@@ -1110,6 +1121,13 @@ void mr_set_audio_source(mr_audio_source_fn fn, void *ctx)
 {
     g_src_ctx = ctx;
     __atomic_store_n(&g_src, fn, __ATOMIC_RELEASE);
+}
+
+void mr_set_audio_in_sink(mr_audio_in_fn fn, void *ctx)
+{
+    __atomic_store_n(&g_ain_fn, NULL, __ATOMIC_RELEASE);
+    g_ain_ctx = ctx;
+    __atomic_store_n(&g_ain_fn, fn, __ATOMIC_RELEASE);
 }
 
 int mr_adopt(int fd)

@@ -25,6 +25,15 @@
 #include "mr_core.h"
 
 static volatile int g_audio_stop;
+static const int16_t *volatile g_sim_ain;   /* mr_sim_set_audio_in: the input pcm (looped), NULL the tone */
+static volatile uint32_t g_sim_ain_n;
+
+void mr_sim_set_audio_in(const int16_t *pcm, uint32_t frames)
+{
+    __atomic_store_n(&g_sim_ain, NULL, __ATOMIC_RELEASE);
+    g_sim_ain_n = pcm ? frames : 0;
+    __atomic_store_n(&g_sim_ain, frames ? pcm : NULL, __ATOMIC_RELEASE);
+}
 
 /* ---- USB-A: the device's packets wait in the bridge (at most MR_SIM_BRIDGE_PKTS, the rest lost), each transfer
  * takes up to MR_SIM_BRIDGE_IN; the transfer's cable-2 packets go to the device */
@@ -86,10 +95,24 @@ static void *audio_main(void *arg)
     int nout = 0, blk = 0, i;
     (void)arg;
     while (!g_audio_stop) {
-        for (i = 0; i < MR_BLOCK; i++) {
-            const int16_t v = (int16_t)(1000.0 * sin(ph));
-            ph += 2.0 * M_PI * 440.0 / MR_SAMPLE_RATE;
-            ain[i * 2] = ain[i * 2 + 1] = v;
+        {
+            const int16_t *pcm = __atomic_load_n(&g_sim_ain, __ATOMIC_ACQUIRE);
+            static uint32_t at;
+            if (pcm) {   /* (mr_sim_set_audio_in: a test's input, looped) */
+                const uint32_t n = g_sim_ain_n;
+                for (i = 0; i < MR_BLOCK; i++) {
+                    if (at >= n)
+                        at = 0;
+                    ain[i * 2] = pcm[2 * at];
+                    ain[i * 2 + 1] = pcm[2 * at + 1];
+                    at++;
+                }
+            } else
+                for (i = 0; i < MR_BLOCK; i++) {
+                    const int16_t v = (int16_t)(1000.0 * sin(ph));
+                    ph += 2.0 * M_PI * 440.0 / MR_SAMPLE_RATE;
+                    ain[i * 2] = ain[i * 2 + 1] = v;
+                }
         }
         if (ph > 2.0 * M_PI * 1000)
             ph = fmod(ph, 2.0 * M_PI);

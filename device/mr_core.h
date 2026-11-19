@@ -62,6 +62,19 @@ void mr_set_port(int port);
 void mr_set_audio_source(mr_audio_source_fn fn, void *ctx);
 int mr_adopt(int fd);
 
+/* ---- audio input for an embedder (RemoteFM14Move: a Fantasy CFW's ain1). Move Remote itself calls neither, so
+ * without them its input goes to the host connection as before (MR_H_CONFIG's input flag), and only there.
+ *
+ * mr_set_audio_in_sink: any time; fn non-NULL: the rt thread calls fn(ctx, in, MR_BLOCK) once per block with that
+ * transfer's input pcm (stereo int16 interleaved, 44.1 kHz: the line in, else the mic; silence when the platform
+ * gives none), before the block's output is taken from the audio source. fn runs on the rt thread: it must not block,
+ * allocate or lock. NULL: off.
+ * mr_sim_set_audio_in (plat_sim.c only; tests): the simulator's input pcm, frames stereo int16 played looped in place
+ * of its quiet 440 Hz tone; NULL: the tone again. The buffer must stay until it is replaced. */
+typedef void (*mr_audio_in_fn)(void *ctx, const int16_t *in, int frames);
+void mr_set_audio_in_sink(mr_audio_in_fn fn, void *ctx);
+void mr_sim_set_audio_in(const int16_t *pcm, uint32_t frames);
+
 /* ---- USB-A for an embedder (an FM-1 on the Move's USB-A port, RemoteFM14Move): Move Remote itself calls none of
  * these, so without them its USB-A goes to and from the host connection as before (MR_D_INPUT, MR_H_MIDI).
  *
