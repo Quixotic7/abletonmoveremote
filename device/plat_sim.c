@@ -156,6 +156,8 @@ static void on_term(int sig)
     mr_request_stop();
 }
 
+void mr_plat_power_off(void) { fprintf(stderr, "moveremote-sim: power off asked (the simulator: nothing powered off)\n"); }
+
 /* an embedder builds this file with -DMR_PLAT_MAIN=<its name> and calls it from its own main */
 #ifndef MR_PLAT_MAIN
 #define MR_PLAT_MAIN main
@@ -200,8 +202,9 @@ int MR_PLAT_MAIN(int argc, char **argv)
     g_audio_stop = 1;
     pthread_join(audio, NULL);
     mr_shutdown();
-    if (how == MR_STOP_POWER)   /* (plat_move.c powers the Move off here) */
-        fprintf(stderr, "moveremote-sim: power off asked (the simulator: nothing powered off)\n");
+    mr_plat_set_stopped(how);
+    if (how == MR_STOP_POWER && !mr_power_off_late())   /* (plat_move.c powers the Move off here) */
+        mr_plat_power_off();
     fprintf(stderr, "moveremote-sim: stopped (%d)\n", how);
     return 0;
 }

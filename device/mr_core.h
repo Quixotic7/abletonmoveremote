@@ -39,6 +39,16 @@ void mr_request_stop(void);                    /* async-signal-safe: mr_step() r
  * button held 2 s does; the platform then powers the Move off (plat_move.c: Move's power service over D-Bus; the
  * simulator only logs it) */
 void mr_request_power_off(void);
+/* the power off later (embedding): mr_set_power_off_late(1) before the platform's main: on MR_STOP_POWER (the 2 s
+ * hold or mr_request_power_off) the platform's main returns without powering off, mr_plat_stopped() says why it
+ * stopped, and the embedder calls mr_plat_power_off() once its own work is saved. mr_plat_power_off: on the Move
+ * Move's power service over D-Bus, then it holds (deaf to TERM) until the power goes; nothing after a TERM; the
+ * simulator only logs it */
+void mr_set_power_off_late(int on);
+int mr_power_off_late(void);
+int mr_plat_stopped(void);
+void mr_plat_set_stopped(int how);
+void mr_plat_power_off(void);
 void mr_set_realtime(int rt);                  /* reported in MR_D_STATUS */
 int mr_test_vol(void);                         /* percent of output (100 unless the test hook is on) */
 void mr_shutdown(void);

@@ -1446,6 +1446,11 @@ int mr_init(const mr_cfg_t *cfg)
 
 void mr_request_stop(void) { g_stop_req = 1; }
 void mr_request_power_off(void) { g_power_req = 1; }
+static volatile int g_power_late, g_plat_stopped;
+void mr_set_power_off_late(int on) { g_power_late = on; }
+int mr_power_off_late(void) { return g_power_late; }
+int mr_plat_stopped(void) { return g_plat_stopped; }
+void mr_plat_set_stopped(int how) { g_plat_stopped = how; }
 void mr_set_realtime(int rt) { g_rt = rt; }
 int mr_test_vol(void) { return g_test_vol; }
 
