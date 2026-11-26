@@ -47,7 +47,7 @@ static mr_ring_t r_in, r_ain, r_batch, r_led, r_mout, r_aout, r_inject, r_uin, r
 
 static int g_wake[2] = { -1, -1 };
 static volatile int g_wake_pending;
-static volatile sig_atomic_t g_stop_req;
+static volatile sig_atomic_t g_stop_req, g_power_req;
 
 /* main -> rt */
 static volatile int g_connected, g_cfg_clock = 1, g_cfg_ain, g_cfg_batch = 2, g_out_gain = 256, g_flush_aout;
@@ -1360,6 +1360,13 @@ static int test_poll(uint64_t ms)
                 test_shot();
             else if (!strcmp(buf, "quit"))
                 quit = 1;
+            else if (sscanf(buf, "power %d", &a) == 1) {   /* the power button down (1) or up (0): its SysEx report */
+                const uint8_t pw[4][4] = { { 0x04, 0xF0, 0x00, 0x21 }, { 0x04, 0x1D, 0x01, 0x01 },
+                                           { 0x04, 0x3A, (uint8_t)(a ? 0x08 : 0x00), (uint8_t)(g_battery & 0x7F) },
+                                           { 0x06, 0x00, 0xF7, 0x00 } };
+                if (mr_ring_space(&r_inject) >= 4)
+                    mr_ring_push(&r_inject, pw, 4);
+            }
             else if (sscanf(buf, "%7s %d %d", cmd, &a, &b) == 3 && a >= 0 && a < 128 && b >= 0 && b < 128) {
                 uint8_t p[4] = { 0, 0, (uint8_t)a, (uint8_t)b };
                 if (!strcmp(cmd, "note"))
@@ -1438,6 +1445,7 @@ int mr_init(const mr_cfg_t *cfg)
 }
 
 void mr_request_stop(void) { g_stop_req = 1; }
+void mr_request_power_off(void) { g_power_req = 1; }
 void mr_set_realtime(int rt) { g_rt = rt; }
 int mr_test_vol(void) { return g_test_vol; }
 
@@ -1559,6 +1567,8 @@ int mr_step(int max_wait_ms)
             why = MR_STOP_EXIT;
         else if (g_quit_why)
             why = MR_STOP_EXIT;
+        else if (g_power_req)   /* (the embedder's "Shut Down?" confirmed) */
+            why = MR_STOP_POWER;
         else if (g_power_since && (uint32_t)(g_frame - g_power_since) > 2u * MR_SAMPLE_RATE)
             why = MR_STOP_POWER;
         if (why != MR_RUN) {
@@ -1567,7 +1577,8 @@ int mr_step(int max_wait_ms)
             if (g_active)
                 send_bye(g_active, why == MR_STOP_POWER ? MR_BYE_SHUTDOWN : g_quit_req ? MR_BYE_EXIT : MR_BYE_QUIT);
             leds_off();
-            logf_("stopping: %s", why == MR_STOP_POWER ? "power off" : why == MR_STOP_SIGNAL ? "signal"
+            logf_("stopping: %s", why == MR_STOP_POWER ? (g_power_req ? "power off (asked)" : "power off")
+                                  : why == MR_STOP_SIGNAL ? "signal"
                                   : g_quit_req ? "the exit gesture" : "the host asked");
         }
     }

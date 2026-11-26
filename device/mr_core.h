@@ -35,6 +35,10 @@ void mr_rt_late(void);                         /* the platform saw a late transf
 /* the main thread: waits up to max_wait_ms for something to do. Returns MR_RUN or why to stop */
 int mr_step(int max_wait_ms);
 void mr_request_stop(void);                    /* async-signal-safe: mr_step() returns MR_STOP_SIGNAL */
+/* any thread (an embedder's "Shut Down?" confirmed): mr_step() says BYE(3) and returns MR_STOP_POWER, as the power
+ * button held 2 s does; the platform then powers the Move off (plat_move.c: Move's power service over D-Bus; the
+ * simulator only logs it) */
+void mr_request_power_off(void);
 void mr_set_realtime(int rt);                  /* reported in MR_D_STATUS */
 int mr_test_vol(void);                         /* percent of output (100 unless the test hook is on) */
 void mr_shutdown(void);

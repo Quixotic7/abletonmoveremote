@@ -200,6 +200,8 @@ int MR_PLAT_MAIN(int argc, char **argv)
     g_audio_stop = 1;
     pthread_join(audio, NULL);
     mr_shutdown();
+    if (how == MR_STOP_POWER)   /* (plat_move.c powers the Move off here) */
+        fprintf(stderr, "moveremote-sim: power off asked (the simulator: nothing powered off)\n");
     fprintf(stderr, "moveremote-sim: stopped (%d)\n", how);
     return 0;
 }

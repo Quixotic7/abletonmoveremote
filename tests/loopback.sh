@@ -35,6 +35,11 @@ if [[ -s "$DIR/mr-screen.pbm" ]] && head -1 "$DIR/mr-screen.pbm" | grep -q P1; t
 else echo "  FAIL  screen shot"; fail=1; fi
 grep -q "host=" "$DIR/mr-state" && echo "  ok    state line: $(cat "$DIR/mr-state")" || { echo "  FAIL  state line"; fail=1; }
 
+echo "power 1" > "$DIR/mr-cmd"; sleep 0.4   # the power button down: its report decoded (a short press, no power off)
+grep -q "power=8" "$DIR/mr-state" && echo "  ok    power button down" || { echo "  FAIL  power button down"; fail=1; }
+echo "power 0" > "$DIR/mr-cmd"; sleep 0.4
+grep -q "power=0" "$DIR/mr-state" && kill -0 $SIM 2>/dev/null && echo "  ok    power button up, still running" \
+    || { echo "  FAIL  power button up"; fail=1; }
 echo "quit" > "$DIR/mr-cmd"
 for _ in $(seq 30); do kill -0 $SIM 2>/dev/null || break; sleep 0.1; done
 if kill -0 $SIM 2>/dev/null; then echo "  FAIL  the simulator ignored quit"; fail=1; else echo "  ok    quit"; fi

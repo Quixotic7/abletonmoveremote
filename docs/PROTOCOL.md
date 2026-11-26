@@ -148,7 +148,8 @@ up to about 57 times a second; a host need not pace its writes.
 - **Exit:** Shift held + volume knob touched + jog wheel clicked leaves Move Remote (`BYE(1)`), and Schwung's
   launcher starts Move again. This is decided on the audio thread from the raw events, so it works with no host or a
   wedged one.
-- **Power:** the power button held for 2 s powers the Move off (`BYE(3)`).
+- **Power:** the power button held for 2 s powers the Move off (`BYE(3)`). A press is passed on as its SysEx report in INPUT, so a host can ask
+  first (an embedder then calls `mr_request_power_off()`, the same power off).
 - **Speaker:** with Move's software stopped there is no speaker EQ (Schwung's `speaker_eq.c` is not applied yet).
 
 ## The bridge (https pages)
