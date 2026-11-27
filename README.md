@@ -47,7 +47,8 @@ To update later, use the same page: Move Remote shows an update when there is a 
      shows every press, lights the pads you press, and lets you draw on the Move's screen. It works on an iPhone
      or iPad too.
 3. **Leave it:** hold **Shift**, touch the **volume knob** and **click the jog wheel**. Move's own software starts
-   again. Holding the power button for 2 seconds turns the Move off.
+   again. Holding the power button for 2 seconds turns the Move off. (An embedder can also ask for the power off
+   itself, `mr_request_power_off()`: RemoteFM14Move's "Shut Down?", confirmed with the jog click.)
 
 While Move Remote runs, the Move only does what the connected app tells it, so it makes no sound of its own.
 
@@ -95,7 +96,7 @@ scripts/deploy.sh --test  # onto ableton@move.local and started, SILENT (--launc
 ```
 
 The simulator is the device's own code with a fake surface. It takes presses from its test FIFO (`mr-cmd`: `note N
-VEL`, `cc N VAL`, `at N PRESSURE`, `shot`, `quit`) and writes its state to `mr-state`. On the Move, the same hook
+VEL`, `cc N VAL`, `at N PRESSURE`, `power 1|0` (the power button down / up, as its SysEx report), `shot`, `quit`) and writes its state to `mr-state`. On the Move, the same hook
 is on when `/dev/shm/mr-test` exists at launch, which `deploy.sh --test` arranges.
 
 ## Layout

@@ -21,6 +21,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/* the host beside bin/: an embedder that ships this helper builds it with -DHEAL_HOST='"<its host>"' */
+#ifndef HEAL_HOST
+#define HEAL_HOST "moveremote-host"
+#endif
+
 static int exe_of(const char *proc, char *out, size_t cap)
 {
     const ssize_t n = readlink(proc, out, cap - 1);
@@ -56,7 +61,7 @@ int main(int argc, char **argv)
     if (!(slash = strrchr(self, '/')) || strcmp(slash, "/bin") != 0)
         return 3;
     *slash = '\0';
-    snprintf(want, sizeof want, "%s/moveremote-host", self);
+    snprintf(want, sizeof want, "%s/" HEAL_HOST, self);
     snprintf(path, sizeof path, "/proc/%ld/exe", pid);
     if (exe_of(path, target, sizeof target) < 0 || strcmp(target, want) != 0) {
         fprintf(stderr, "heal: pid %ld is not %s\n", pid, want);

@@ -241,12 +241,16 @@ static void on_term(int sig)
 /* the power off: Move's own power service over D-Bus (movy-host's power.c). The call answers at once and the power
  * goes seconds later, so this process then HOLDS, deaf to TERM: were it to exit, Schwung's launcher would start Move
  * again and the power cut would catch it mid-boot */
-static void power_off(void)
+void mr_plat_power_off(void)
 {
     char *argv[] = { "/usr/bin/dbus-send", "--system", "--print-reply", "--dest=com.ableton.system",
                      "/com/ableton/System/Power", "com.ableton.system.shutDown", NULL };
     pid_t child;
     int i;
+    if (g_stop) {
+        logf_("power: not off (TERM came first)");
+        return;
+    }
     logf_("power: off, by com.ableton.system");
     signal(SIGTERM, SIG_IGN);
     if (posix_spawn(&child, argv[0], NULL, NULL, argv, environ) != 0) {
@@ -257,7 +261,12 @@ static void power_off(void)
         sleep(1);
 }
 
-int main(int argc, char **argv)
+/* an embedder builds this file with -DMR_PLAT_MAIN=<its name> and calls it from its own main */
+#ifndef MR_PLAT_MAIN
+#define MR_PLAT_MAIN main
+#endif
+int MR_PLAT_MAIN(int argc, char **argv);
+int MR_PLAT_MAIN(int argc, char **argv)
 {
     pthread_t audio;
     struct sigaction sa;
@@ -312,7 +321,8 @@ int main(int argc, char **argv)
     pthread_join(audio, NULL);
     spi_close();
     mr_shutdown();
-    if (how == MR_STOP_POWER && !g_stop)
-        power_off();
+    mr_plat_set_stopped(how);
+    if (how == MR_STOP_POWER && !g_stop && !mr_power_off_late())
+        mr_plat_power_off();   /* (late: the embedder calls it once its work is saved) */
     return 0;
 }

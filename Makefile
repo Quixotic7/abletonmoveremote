@@ -2,7 +2,8 @@
 # Move Remote.
 #
 #   make                 the simulator (build/sim/moveremote-sim) and the host side (build/host: libmoveremote.a, mrctl)
-#   make test            the simulator and mrctl selftest end to end, plus the page and the WebSocket handshake
+#   make test            the simulator and mrctl selftest end to end, plus the page and the WebSocket handshake;
+#                        the USB-A embedding hooks (tests/usba_check.c)
 #   make move            build/move/moveremote-host and moveremote-heal for the Move (aarch64, in Docker)
 #   make package         dist/moveremote-module.tar.gz, what Schwung Manager installs
 #   scripts/deploy.sh --test   onto ableton@move.local and started, silent (scripts/deploy.sh says more)
@@ -47,7 +48,13 @@ build/host/libmoveremote.a: build/host/mr_client.o build/host/mr_gfx.o build/hos
 build/host/mrctl: tools/mrctl.c build/host/libmoveremote.a
 	$(CC) $(CFLAGS) $(WARN) -o $@ $< build/host/libmoveremote.a -lm
 
-test: sim host
+# the USB-A embedding hooks on the device core alone (no platform)
+build/sim/usba_check: tests/usba_check.c $(DEV_SRC) $(DEV_HDR)
+	mkdir -p build/sim
+	$(CC) $(CFLAGS) $(WARN) -Ibuild/gen -o $@ tests/usba_check.c $(DEV_SRC) -lm -lpthread
+
+test: sim host build/sim/usba_check
+	build/sim/usba_check
 	tests/loopback.sh
 
 # the Move: Schwung's toolchain (debian bookworm, gcc-aarch64-linux-gnu), linked static so the unit's glibc is never
