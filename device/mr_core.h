@@ -12,7 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MR_VERSION "0.1.1"
+#define MR_VERSION "0.1.2"
 #define MR_OUT_MAX 20                         /* USB-MIDI packets the surface takes per transfer */
 
 typedef struct {

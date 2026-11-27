@@ -1,7 +1,7 @@
 {
     "id": "moveremote",
     "name": "Move Remote",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "api_version": 2,
     "author": "Quixotic7",
     "description": "The whole Move as a control surface for a computer, phone or tablet, over USB or Wi-Fi",
